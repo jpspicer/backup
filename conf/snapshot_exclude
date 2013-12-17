@@ -1,0 +1,8 @@
+#one pattern/path per line
+#any line starting in # or ; and blank lines will be ignored
+
+#exapmles
+#Pictures/no_backup
+#*~
+#Music
+

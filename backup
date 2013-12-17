@@ -1,0 +1,279 @@
+#!/bin/bash
+#backup script
+
+############################
+#		 functions	 	   #
+############################
+
+function backup # regular inplace backup
+{
+	/usr/bin/rsync --archive --delete --delete-excluded --perms --owner $exclude --exclude-from=$exclude_file $verbose $srcdir $destdir \
+	&& echo -e "$(date) \nBackup successful!" >> $log \
+	|| echo -e "$(date) \nERROR! Backup failed for unknown reason!" >> $log # writes an error message to the log if rsync fails,
+}
+
+function snapshot_backup #snapshot backup.
+{
+#checks to see if the file is to be compressed and decides what the filenames should be.
+	if [ "$compression_type" = "--bzip2" ] ; then
+		tfile = "$tf$(date +%m-%d-%y).tbz"
+		hashfile="$tf$(date +%m-%d-%y).md5"
+	elif [ "$compression_type" = "--gzip" ] ; then
+		tfile="$tf$(date +%m-%d-%y).tgz"
+		hashfile="$tf$(date +%m-%d-%y).md5"
+	elif [ "$compression_type" = "" ] ; then
+		tfile="$tf$(date +%m-%d-%y).tar"
+		hashfile="$tf$(date +%m-%d-%y).md5"
+	fi
+	
+	#makes sure that a file with the name of the bakeup file doesn't already exist. I could be bad if you over write that file.
+	if [ -e "$tfile" ] ; then
+		echo -e "$(date) \nError! Incremental backup faild; file already exists." >>$log
+		echo "File already exists" 1>&2
+		exit 1
+	fi
+#moving to the incsircdir is a hack so that it doesn't include all of the folder leading up to incsrcdir. I don't like it and I would rather find a better way to do it.
+	cd $snapsrcdir \
+	&& /bin/tar $verbose $compression_type --exclude-from $snapshot_exclude_file --create --file $tfile ./* \
+	&& /bin/chmod 0500 $tfile \
+	&& md5sum $tfile > $hashfile \
+	&& echo -e "$(date) \nIncremental backup successful!" >> $log \
+	|| echo -e "$(date) \nERROR! incremental backup failed for unknown reason" >> $log
+}
+
+function restore
+{
+	/usr/bin/rsync --archive --delete $verbose $destdir $srcdir \
+	&& echo -e "$(date) \nRestore successful!" >> $log \
+	|| echo -e "$(date) \nERROR! Restore failed for unknown reason!" >> $log
+	echo "test"
+}
+
+
+function snapshot_restore
+{
+	#Looks to see what the filename is and set the variables.
+	if [ -e $snapshop_date.tbz ] ; then
+		bakfile="$snapshop_date.tbz"
+		hashfile="$snapshop_date.md5"
+	elif [ -e $snapshop_date.tgz ] ; then
+		bakfile="$snapshop_date.tgz"
+		hashfile="$snapshop_date.md5"
+	elif [ -e $snapshop_date.tar ] ; then
+		bakfile="$snapshop_date.tar"
+		hashfile="$snapshop_date.md5"
+	else
+		echo "no backup with that name found" 1>&2
+		exit 1
+	fi
+	
+	if [ -e $hashfile ]; then
+		if [ $(md5sum -c $hashfile) ]; then
+		echo "Backup is good" 1>&2
+		else
+		echo "backup may be corrupt" 1>&2
+		exit 1
+		fi
+	else
+		echo "The integrity of this backup could not be determined bacause no hash could be found for this backup." 1>&2
+	fi
+	
+	mkdir $snapshop_date \
+	&& tar $verbose $compression_type --extract --file $bakfile -C $snapshop_date \
+	&& rsync $verbose --archive --delete $snapshop_date/ $snapsrcdir \
+	&& echo -e "$(date) \nRestore successful!" >> $log \
+	|| echo -e "$(date) \nERROR! Restore failed for unknown reason!" >> $log \
+	&& $foorm -rf $snapshop_date
+}
+
+function remove_backup
+{
+	if [ -e $rm_item_path.tar ] ; then
+		stupidpieceofcrap="$rm_item_path.tar"
+	elif [ -e $rm_item_path.tgz ]; then
+		stupidpieceofcrap="$rm_item_path.tgz"
+	elif [ -e $rm_item_path.tbz ]; then
+		stupidpieceofcrap="$rm_item_path.tgz"
+	else
+		echo "No backup with that name could be found" \
+		&& echo -e "$(date) \n$Deletion of $rm_item_name faild! File does not exist!" >> $log
+	fi
+	echo $stupidpieceofcrap
+	
+	if [ -e "$stupidpieceofcrap" ] ; then
+		echo "Removing backup. This could take some time" 1>&2
+		$foorm -rf $stupidpieceofcrap \
+		&& echo -e "$(date) \n$rm_item_name deleted." >> $log \
+		|| echo -e "$(date) \nDeletion of $rm_item_name faild!" >> $log
+	fi
+}
+
+function encrypt
+{
+	#needs to ask for the name of the user the owns the key
+	#find a way to automatically determine file encrypt (what was I talking about here? I must have been tired... maybe which file is being encrypted? that doesn't really make any sense)
+	#need to find a way to get the pass-phrase from user and into gpg
+	gpg -c -e -r $identifying_device $file
+}
+
+function cleanup
+{
+	echo "Interrupt captured. Cleaning up. This may take some time." 1>&2
+
+	if [ -e $tfile ]; then
+		$foorm -rf $tfile
+	fi
+	
+	#remove this if I change the config set up to the way I would like to do it.
+	if [ -e /tmp/bu.tmp ]; then
+		$foorm /tmp/bu.tmp
+	fi
+	
+	echo -e "Done. \nExiting." 1>&2
+	exit 1
+}
+
+function usage
+{
+	echo "Backs up all of the files in a given directory to another directory."
+	echo "the configuration file can be found at /etc/backup.conf"
+	echo "-b, --bzip			Compresses output with bzip. Assumes -i."
+	echo "-g, --gzip			Compresses output with gzip. Asummes -i."
+	echo "-h, --help			What you are looking at right now"
+	echo "-m, --remove			remove a snapshot from the backup directory. Put the date of the snapshot ofter the argument. Only the date of the snapshot is needed,not the full path."
+	echo "-n, --normal			normal in place backup"
+	echo "-o, --paranoia			uses shred when removing files"
+	echo "-p, --restore-app			restores application from backup"
+	echo "-q, --restore-snapshot		restores from a Snapshot backup. Put the date of the snapshot after the argument. Only the date of the snapshot is needed,not the full path."
+	echo "-r, --restore			restores from normal backup"
+	echo "-s, --snapshot			Snapshot backup"
+	echo "-u, --user			specify a user by puting his name after this, i.e. -u username"
+	echo "-v, --verbose			verbose mode"
+}
+
+############################
+#          main            #
+############################
+
+trap cleanup SIGHUP SIGINT SIGTERM
+snapshot=""
+compression_type=""
+verbose=""
+backup_type=""
+retore=""
+restore_snapshot=""
+foorm="rm"
+user="$default"
+
+if [ "$1" = "" ]; then
+	backup_type="in_place"
+fi
+
+if [ "$1" = "-v" ]; then
+	if [ "$2" = "" ]; then
+		backup_type="in_place"
+	fi
+fi
+
+while [ "$1" != "" ] ; do
+	case $1 in
+		-b | --bzip2 )			compression_type="--bzip"
+								inc="1"
+								;;
+		-g | --gzip )			compression_type="--gzip"
+								backup_type="snapshot"
+								;;
+		-h | --help )			usage
+								exit 0
+								;;
+		-m | --remove )			remove="true"
+								shift
+								rm_item_name="$1"
+								;;
+		-n | --normal )			backup_type="in_place"
+								;;
+		-o | --paranoia )		foorm="shred -u -z"
+								;;
+		-q | --restore-snapshot )	restore_snapshot="true"
+									shift
+									restore_point="$1"
+									;;
+		-r | --restore )		restore="true"
+								;;
+		-s | --snapshot )	backup_type="snapshot"
+								;;
+		-u | --user	)			shift
+								user="$1"
+								;;
+		-v | --verbose )		verbose="--verbose"
+								;;
+		* )						echo "Unkown argument $1"
+								usage
+								exit 1
+	esac
+	shift
+done
+
+#this doesn't work. Bash isn't parsing $modu as $test. so source gets the string $test instead of a variable.
+# finds the proper config file
+#source /etc/backup/main.conf
+#source ./conf/main.conf
+#dolar=$
+#modu="${dolar}${u}"
+#echo modu is $modu
+#echo $test
+#source $modu
+
+#crappy way of finding the config file.
+bash $HOME/.backup/main.conf $user
+source /tmp/bu.tmp
+source $conf
+rm /tmp/bu.tmp
+
+#check to see if drive is mounted
+#if [ -z "$(mount | grep -i $vol)" ] ; then
+	#echo "drive: $vol is not mounted"
+	#echo -e "$(date) ERROR! \nThe drive is not mounted." >> $log
+	#exit 1
+#fi
+# I have to have u to find the config file but there are veriable which needed variables form the config file so I had to move were they were set
+
+# checks to see what to do and does it.
+
+#restore from backups
+if [ "$restore" = "true" ] ; then
+	restore
+	exit 0
+fi
+
+if [ "$restore_snapshot" = "true" ] ; then
+	if [ "$restore_point" = "" ]; then
+		usage
+		exit 1
+	fi
+	
+	snapshot_backup="$tf$restore_point"
+	snapshot_restore
+	exit 0
+fi
+
+#remove backups
+if [ "$remove" = "true" ] ; then
+	if [ "$rm_item_name" = "" ]; then
+		usage
+		exit 1
+	fi
+	rm_item_path="$tf$rm_item_name"
+	remove_backup
+fi
+
+#backup
+if [ "$backup_type" = "in_place" ] ; then
+	backup
+fi
+
+if [ "$backup_type" = "snapshot" ] ; then
+	snapshot_backup
+fi
+
+exit 0

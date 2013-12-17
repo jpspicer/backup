@@ -1,0 +1,14 @@
+todo:
+gpg
+list backups
+web backups (http/ftp)
+
+in progress:
+make it a little more vocal. print to log and standard output.
+	I need to take a look at everywhere it prints(echos) because I'v done a few different things and I want to clean it up.
+refactoring variable names
+
+needs testing:
+
+
+done:
